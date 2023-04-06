@@ -1,6 +1,11 @@
 from pymongo import MongoClient, collection
 from os import getenv
 from dotenv import load_dotenv, find_dotenv
+import matplotlib.pyplot as plt
+import numpy as np
+import textwrap
+import json
+import pandas as pd
 
 def get_database():
 
@@ -226,6 +231,137 @@ def analyze_mental_health_impact(data: collection.Collection, data_count: int):
     )
     return result
 
+def analyze_remote_work_impact(data: collection.Collection, data_count: int):
+
+    result = data.aggregate(
+        [        
+            {
+                "$match": {
+                    "$and": [
+                        {
+                            "MainBranch": { "$exists": True, "$eq": "I am a developer by profession" }
+                        },
+                        {
+                            "Employment": "Employed, full-time",
+                        },
+                        {
+                            "$or": [
+                                { "RemoteWork": { "$exists": True, "$eq": "Fully remote" } },
+                                { "RemoteWork": { "$exists": True, "$eq": "Hybrid (some remote, some in-person)" } }
+                            ]
+                        },
+                        {
+                            "YearsCodePro": { "$exists": True, "$ne": "NA" },
+                        },
+                        {
+                            "ConvertedCompYearly": { "$exists": True, "$ne": "NA" },
+                        }
+                    ],
+                }
+            },
+            {
+                "$addFields": {
+                    "AgeDigits": {
+                        "$regexFind": {
+                            "input": "$Age",
+                            "regex": "\\d+"
+                        }
+                    }
+                }
+            },
+            {
+                "$addFields": {
+                    "AgeInt": {
+                        "$toInt": "$AgeDigits.match"
+                    }
+                }
+            },
+            {
+                "$addFields": {
+                    "AgeGroup": {
+                        "$switch": {
+                            "branches": [
+                                { "case": { "$lte": [ "$AgeInt", 24 ] }, "then": "Under 25" },
+                                { "case": { "$lte": [ "$AgeInt", 34 ] }, "then": "25-35" },
+                                { "case": { "$lte": [ "$AgeInt", 44 ] }, "then": "35-45" },
+                                { "case": { "$lte": [ "$AgeInt", 54 ] }, "then": "45-55" },
+                                { "case": { "$gte": [ "$AgeInt", 55 ] }, "then": "55+" }
+                            ]
+                        }
+                    }
+                }
+            },
+            {
+                "$group": {
+                    "_id": {
+                        "Age": "$AgeGroup",
+                        "RemoteWork": "$RemoteWork"
+                    },
+                    "AvgCompensation": { "$avg": "$ConvertedCompYearly"},
+                    "AvgYearsExp": { "$avg": "$YearsCodePro"},
+                    "Count": { "$sum": 1}
+                }
+            },
+            {
+                "$project":{
+                    "_id": 0,
+                    "Age": "$_id.Age",
+                    "RemoteWork": "$_id.RemoteWork",
+                    "AvgCompensation": 1,
+                    "AvgYearsExp": 1,
+                    "Count": 1
+                }
+            },
+            {"$sort": {"Age": 1, "RemoteWork": 1}},
+        ]
+    )
+    return result
+
+def plot_analyze_result_2(labels: list, values: list):
+    
+    fig, ax = plt.subplots(figsize=(10, 6))
+    ax.barh(labels, values)
+
+    # Axis Configuration
+    ax.set_title('Effect of work on mental health')
+    ax.set_xlabel('Percentage of respondents with mental health issues')
+    ax.set_ylabel('Age Group, Gender, and Ethnicity')
+
+    # Rotate x-axis labels
+    plt.xticks(rotation=45)
+
+    # Show plot
+    plt.show()
+
+    return
+
+def plot_analyze_result_3(D1: list, D2: list, D3: list,):
+    
+    # set up the figure and axes
+    fig, ax = plt.subplots(figsize=(10, 6))
+
+    # plot the data
+    bar_width = 0.35
+    opacity = 0.8
+    index = np.arange(len(age_groups))
+
+    ax.bar(index, D2, bar_width, alpha=opacity, color='b', label='Fully remote')
+
+    ax.bar(index + bar_width, D3, bar_width, alpha=opacity, color='g', label='Hybrid')
+
+    # add labels and title
+    ax.set_xlabel('Age groups')
+    ax.set_ylabel('Average Compensation')
+    ax.set_title('Average Compensation by Age group and Remote Work preference')
+    ax.set_xticks(index + bar_width / 2)
+    ax.set_xticklabels(D1)
+    ax.legend()
+
+    # display the chart
+    plt.show()
+    
+    return
+
 if __name__ == "__main__":
 
     #Get the database
@@ -236,17 +372,60 @@ if __name__ == "__main__":
 
     #Count of total data.
     data_count = stack_data.count_documents({})    
-    print("Data Count => ", data_count)
+    print("Data Count => ", data_count, "\n")
 
     #Analyze 1: Tech Stack Preference
     analyze_result_1 = analyze_tech_stack_preference(stack_data, data_count)
     print("Task1 Result:")
+    data = []
     for doc in analyze_result_1:
-        print(doc)
-    print("\n")
+        data.append(doc)
+
+    def pretty_json_for_savages(j, indentor='  '):
+        ind_lvl = 0
+        temp = ''
+        for i, c in enumerate(j):
+            if c in '{[':
+                print(indentor*ind_lvl + temp.strip() + c)
+                ind_lvl += 1
+                temp = ''
+            elif c in '}]':
+                print(indentor*ind_lvl + temp.strip() + '\n' + indentor*(ind_lvl-1) + c, end='')
+                ind_lvl -= 1
+                temp = ''
+            elif c in ',':
+                print(indentor*(0 if j[i-1] in '{}[]' else ind_lvl) + temp.strip() + c)
+                temp = ''
+            else:
+                temp += c
+        print('')
+
+    pretty_json_for_savages(json.dumps(data))
+    print("\n")    
 
     #Analyze 2: Impact on Mental Health
     analyze_result_2 = analyze_mental_health_impact(stack_data, data_count)
     print("Task2 Result:")
+
+    labels, values = [],[]
     for doc in analyze_result_2:
-        print(doc)
+        labels.append(doc['AgeGroup'] + ' ' + doc['Gender'] + ' ' + doc['Ethnicity'])
+        values.append(doc['percentage_mental_health_issues'])
+
+    plot_analyze_result_2(labels, values)
+    print("\n")
+
+    #Analyze 3: Impact of Remote Work on Age Group
+    analyze_result_3 = analyze_remote_work_impact(stack_data, data_count)
+    print("Task3 Result:")
+
+    age_groups, compensation_remote, compensation_hybrid = ['Under 25', '25-35', '35-45', '45-55', '55+'], [], []
+    for doc in analyze_result_3:
+        # data for the chart        
+        if doc['RemoteWork'] == "Fully remote":
+            compensation_remote.append(doc['AvgCompensation'])
+        else:
+            compensation_hybrid.append(doc['AvgCompensation'])    
+
+    plot_analyze_result_3(age_groups, compensation_remote, compensation_hybrid)
+    
