@@ -3,8 +3,7 @@ from os import getenv
 from dotenv import load_dotenv, find_dotenv
 import matplotlib.pyplot as plt
 import numpy as np
-import textwrap
-import json
+import math
 import pandas as pd
 from prettytable import PrettyTable
 
@@ -60,7 +59,18 @@ def analyze_tech_stack_preference(data: collection.Collection, data_count: int):
                     "_id": {
                         "Country": "$Country",
                         "TechnologyStack": {"$concat": ["$LanguageList", ";", "$WebframeList"]},
-                        "CompFreq": "$CompFreq"
+                        "CompFreq": "$CompFreq",
+                        "OrgSize": {
+                            "$switch": {
+                                "branches": [
+                                    { "case": { "$lte": ["$OrgSize", 10] }, "then": "Small" },
+                                    { "case": { "$lte": ["$OrgSize", 100] }, "then": "Medium" },
+                                    { "case": { "$lte": ["$OrgSize", 1000] }, "then": "Large" },
+                                    { "case": { "$gte": ["$OrgSize", 10000] }, "then": "Very Large" }
+                                ],
+                                "default": "Unknown"
+                            }
+                        }
                     },
                     "Count": {"$sum": 1},
                     "CompTotal": { "$avg": "$CompTotal" }
@@ -70,6 +80,7 @@ def analyze_tech_stack_preference(data: collection.Collection, data_count: int):
                 "$group": {
                     "_id": {
                         "Country": "$_id.Country",
+                        "OrgSize": "$_id.OrgSize"
                     },
                     "TechnologyStacks": {
                         "$push": {
@@ -105,6 +116,7 @@ def analyze_tech_stack_preference(data: collection.Collection, data_count: int):
             {
                 "$project": {
                     "Country": "$_id.Country",
+                    "OrgSize": "$_id.OrgSize",
                     "DominantStack": 1,
                     "LeastDominantStack": {"$arrayElemAt": ["$TechnologyStacks", -1]},
                     "TotalDevelopers": 1,
@@ -241,7 +253,7 @@ def analyze_mental_health_impact(data: collection.Collection, data_count: int):
                 }
             },
             {
-                "$sort": { "likely_mental_health_issues": -1 }
+                "$sort": { "percentage_likely_mental_health_issues": -1 }
             },
             {
                 "$limit": 5
@@ -336,64 +348,229 @@ def analyze_remote_work_impact(data: collection.Collection, data_count: int):
     )
     return result
 
-def self_taught_dev_landed_job(data: collection.Collection, data_count: int):
+def employed_vs_unemployed_gap(data: collection.Collection, data_count: int):
 
     result = data.aggregate(
         [
             {
-                "$match": {
-                    "$and": [
+                "$facet": {
+                    "employedDevelopers": [
                         {
-                            "MainBranch": { 
-                                "$exists": True, 
-                                "$in": ["I am a developer by profession", "I used to be a developer by profession, but no longer am"] }
+                        "$match": {
+                            "$and": [
+                            {
+                                "MainBranch": {
+                                "$exists": True,
+                                "$in": [
+                                    "I am a developer by profession",
+                                    "I used to be a developer by profession, but no longer am"
+                                ]
+                                }
+                            },
+                            {
+                                "LearnCode": {
+                                "$regex": "^(?!.*(?:Coding Bootcamp|School|Online Courses or Certification)).*$",
+                                "$ne": "NA"
+                                }
+                            },
+                            {
+                                "$or": [
+                                {
+                                    "Employment": "Employed, full-time"
+                                },
+                                {
+                                    "Employment": "Employed, full-time",
+                                    "OrgSize": "Just me - I am a freelancer, sole proprietor, etc."
+                                }
+                                ]
+                            },
+                            {
+                                "LanguageHaveWorkedWith" : { "$exists": True, "$ne": "NA" }
+                            }
+                            ]
+                        }
+                        },
+                        {
+                            "$addFields": {
+                                "Languages": {
+                                    "$split": ["$LanguageHaveWorkedWith", ";"]
+                                }
+                            }
+                        },
+                        {
+                            "$unwind": "$Languages"
+                        },
+                        {
+                        "$group": {
+                            "_id": {
+                            "Employment": "$Employment",
+                            "OrgSize": "$OrgSize",
+                            "EdLevel": "$EdLevel",
+                            "Country": "$Country"
+                            },
+                            "Count": {
+                            "$sum": 1
+                            },
+                            "LanguageHaveWorkedWith": {
+                                "$addToSet": "$Languages"
+                            }
+                        }
+                        },
+                        {
+                        "$project": {
+                            "Employment": "$_id.Employment",
+                            "OrgSize": "$_id.OrgSize",
+                            "EdLevel": "$_id.EdLevel",
+                            "Country": "$_id.Country",
+                            "Count": "$Count",
+                            "LanguageHaveWorkedWith": 1,
+                            "_id": 0
+                        }
+                        },
+                        {
+                        "$sort": {
+                            "Count": -1
+                        }
+                        },
+                        {
+                        "$limit": 5
+                        }
+                    ],
+                    "unemployedDevelopers": [
+                    {
+                    "$match": {
+                        "$and": [
+                        {
+                            "MainBranch": {
+                            "$exists": True,
+                            "$in": [
+                                "I am a developer by profession",
+                                "I used to be a developer by profession, but no longer am"
+                            ]
+                            }
                         },
                         {
                             "LearnCode": {
-                                "$regex": "^(?!.*(?:Coding Bootcamp|School|Online Courses or Certification)).*$", "$ne": "NA"
-                            },
+                            "$regex": "^(?!.*(?:Coding Bootcamp|School|Online Courses or Certification)).*$",
+                            "$ne": "NA"
+                            }
                         },
                         {
-                            "Employment": "Employed, full-time"
+                            "Employment": "Not employed, but looking for work"
+                        },
+                        {
+                            "LanguageHaveWorkedWith": { "$exists": True, "$ne": "NA"}
                         }
-                    ]
+                        ]
+                    }
+                    },
+                    {
+                        "$addFields": {
+                            "Languages": {
+                                "$split": ["$LanguageHaveWorkedWith", ";"]
+                            }
+                        }
+                    },
+                    {
+                        "$unwind": "$Languages"
+                    },
+                    {
+                    "$group": {
+                        "_id": {
+                        "EdLevel": "$EdLevel",
+                        "Country": "$Country"
+                        },
+                        "Count": {
+                        "$sum": 1
+                        },
+                        "LanguageHaveWorkedWith": {
+                            "$addToSet": "$Languages"
+                        }
+                    }
+                    },
+                    {
+                    "$project": {
+                        "EdLevel": "$_id.EdLevel",
+                        "Country": "$_id.Country",
+                        "Count": "$Count",
+                        "LanguageHaveWorkedWith": 1,
+                        "_id": 0
+                    }
+                    },
+                    {
+                    "$sort": {
+                        "Count": -1
+                    }
+                    },
+                    {
+                        "$limit": 5
+                    }
+                ]
                 }
-            }        
+            },
+            # {
+            #     "$project": {
+            #         "eL": "$employedDevelopers",
+            #         "uL": "$unemployedDevelopers",
+            #         "unemployedSkillsLack": {
+            #             "$setDifference": [
+            #                 "$employedDevelopers.LanguageHaveWorkedWith",
+            #                 "$unemployedDevelopers.LanguageHaveWorkedWith"
+            #             ]
+            #         }
+            #     }
+            # }
         ]
     )
     return result
 
-def plot_analyze_result_1(result: collection.Collection):
-    data = []
-    for i in result:
-        data.append(i)
+def job_title_and_common_lang_used(data: collection.Collection, data_count: int):
+    result = data.aggregate([
+        { 
+            "$match": { 
+                "DevType": { "$exists": True, "$ne": "NA" }, 
+                "LanguageHaveWorkedWith": { "$exists": True, "$ne": "NA" },
+                "YearsCodePro": { "$exists": True, "$ne": "NA" }, 
+                "ConvertedCompYearly": { "$exists": True, "$ne": "NA" },
+                "Employment": "Employed, full-time"
+            } 
+        },
+        { "$addFields": { 
+            "DevTypeArray": { "$split": ["$DevType", ";"] }, 
+            "LanguageArray": { "$split": ["$LanguageHaveWorkedWith", ";"] }            
+            }
+        },
+        { "$unwind": "$DevTypeArray" },
+        { "$unwind": "$LanguageArray" },
+        { "$group": { 
+            "_id": { "DevType": "$DevTypeArray", "Language": "$LanguageArray" }, 
+            "count": { "$sum": 1 }, 
+            "YearsOfExp": { "$avg": "$YearsCodePro" }, 
+            "Compensation": { "$avg": "$ConvertedCompYearly" }
+        } 
+        },
+        { "$sort": { "_id.DevType": 1, "count": -1 } },
+        { "$group": { 
+            "_id": "$_id.DevType", 
+            "languages": { "$push": { "Language": "$_id.Language", "count": "$count" } }, 
+            "YearsOfExp": { "$avg": "$YearsOfExp" }, 
+            "Compensation": { "$avg": "$Compensation" } 
+        } },
+        { "$project": { "JobTitle": "$_id", "_id": 0, "TopLanguages": { "$slice": [ "$languages", 5 ] }, "YearsOfExp": 1, "Compensation": 1} }
+    ])
+    return result
 
-    table = PrettyTable()
-    table.field_names = ["Country", "Total Developers", "Dominant Technology Stack", "Dominant Count", "Dominant CompTotal", "Least Dominant Technology Stack", "Least Dominant Count", "Least Dominant CompTotal"]
-
-    for item in data:
-        table.add_row([item["Country"],
-                    item["TotalDevelopers"],
-                    item["DominantStack"]["TechnologyStack"],
-                    item["DominantStack"]["Count"],
-                    item["DominantStack"]["CompTotal"],
-                    item["LeastDominantStack"]["TechnologyStack"],
-                    item["LeastDominantStack"]["Count"],
-                    item["LeastDominantStack"]["CompTotal"]])    
-    print(table)
-    return table
-
-def plot_analyze_result_2(data: collection.Collection, data_count: int):
+def plot_analyze_result_1(data: collection.Collection, data_count: int):
     
     # Create a list of dictionaries containing the data to plot
     sdata = []
     max_actual, max_likely = float("-inf"), float("-inf")
-    min_actual, min_likely = float("inf"), float("inf")    
-    for doc in analyze_result_2:        
-        max_actual = max(doc['percentage_likely_mental_health_issues'], max_actual)
-        max_likely = max(doc['percentage_likely_mental_health_issues'], max_likely)
-        min_actual = min(doc['percentage_likely_mental_health_issues'], min_actual)
-        min_likely = min(doc['percentage_likely_mental_health_issues'], min_likely)
+    min_actual, min_likely = float("inf"), float("inf")
+    for doc in data:
+        max_actual = max(doc['percentage_likely_mental_health_issues'], doc['percentage_mental_health_issues'], max_actual)
+        max_likely = max(doc['percentage_likely_mental_health_issues'], doc['percentage_mental_health_issues'], max_likely)
+        min_actual = min(doc['percentage_likely_mental_health_issues'], doc['percentage_mental_health_issues'], min_actual)
+        min_likely = min(doc['percentage_likely_mental_health_issues'], doc['percentage_mental_health_issues'], min_likely)
         sdata.append(doc)
     
     # Create a list of genders and their corresponding colors
@@ -407,14 +584,13 @@ def plot_analyze_result_2(data: collection.Collection, data_count: int):
         ax[i].set_title('Mental Health Issues' if i == 0 else 'Likely Mental Health Issues')
         ax[i].set_xlabel('Ethnicity')
         ax[i].set_ylabel('Percentage')
-        ax[i].set_ylim([min_actual, max_actual+10] if i == 0 else [min_likely, max_likely+10])
+        ax[i].set_ylim([math.floor(min_actual), math.ceil(max_actual)] if i == 0 else [math.floor(min_likely), math.ceil(max_likely)])
         ax[i].tick_params(axis='x')
         ax[i].legend(genders, loc='upper left')
         
     # Add text on each bar chart of coding_activities_count
     for i, v in enumerate(sdata):
-        ax[0].annotate(str(v['total_respondents']), xy=(i, v['percentage_mental_health_issues']), 
-        ha='center', va='bottom')
+        ax[0].annotate(str(v['total_respondents']), xy=(i, v['percentage_mental_health_issues']), ha='center', va='bottom')
         ax[1].annotate(str(v['coding_activities_count']), xy=(i, v['percentage_likely_mental_health_issues']), ha='center', va='bottom')
 
     # Set the overall title of the plot
@@ -425,11 +601,86 @@ def plot_analyze_result_2(data: collection.Collection, data_count: int):
 
     return
 
-def plot_analyze_result_3(data: collection.Collection, data_count: int):
+def plot_analyze_result_2(result: collection.Collection, data_count: int):
+    data = []
+    for i in result:
+        data.append(i)
+
+    table = PrettyTable()
+    table.field_names = ["Country", "Org Size","Total Dev", "Dominant Technology Stack", "Dominant Count", "Dominant CompTotal", "Least Dominant Technology Stack", "Least Dominant Count", "Least Dominant CompTotal"]
+
+    for item in data:
+        table.add_row([item["Country"] if item['Country'] != "United Kingdom of Great Britain and Northern Ireland" else "United Kingdom",
+                    item["OrgSize"],
+                    item["TotalDevelopers"],
+                    item["DominantStack"]["TechnologyStack"],
+                    item["DominantStack"]["Count"],
+                    item["DominantStack"]["CompTotal"],
+                    item["LeastDominantStack"]["TechnologyStack"],
+                    item["LeastDominantStack"]["Count"],
+                    item["LeastDominantStack"]["CompTotal"]])    
+    print(table)
+    return table
+
+def plot_analyze_result_3(data: collection.Collection, count: int):
+    
+    employed_data = {"Employment": [], "OrgSize": [], "EdLevel": [], "Country": [], "LanguageHaveWorkedWith": [], "Count": []}
+    unemployed_data = {"EdLevel": [], "Country": [], "LanguageHaveWorkedWith": [], "Count": []}
+
+    for i in data:
+        employedDevelopers = i['employedDevelopers']
+        unemployedDevelopers = i['unemployedDevelopers']
+        
+        for developer in employedDevelopers:
+            employed_data["Employment"].append(developer["Employment"])
+            employed_data["OrgSize"].append(developer["OrgSize"])
+            employed_data["EdLevel"].append(developer["EdLevel"])
+            employed_data["Country"].append(developer["Country"])
+            employed_data["LanguageHaveWorkedWith"].append(', '.join(developer["LanguageHaveWorkedWith"]))
+            employed_data["Count"].append(developer["Count"])
+        
+        for developer in unemployedDevelopers:
+            unemployed_data["EdLevel"].append(developer["EdLevel"])
+            unemployed_data["Country"].append(developer["Country"])
+            unemployed_data["LanguageHaveWorkedWith"].append(', '.join(developer["LanguageHaveWorkedWith"]))
+            unemployed_data["Count"].append(developer["Count"])
+
+    employed_table = PrettyTable()
+    employed_table.field_names = list(employed_data.keys())
+
+    for row in zip(*employed_data.values()):
+        # Truncate LanguageHaveWorkedWith to 5 values with wrap
+        lhww = row[4].split(', ')
+        if len(lhww) > 5:
+            lhww = lhww[:5]
+            lhww[4] += '...'
+        row = row[:4] + (', '.join(lhww),) + row[5:]
+        employed_table.add_row(row)
+
+    unemployed_table = PrettyTable()
+    unemployed_table.field_names = list(unemployed_data.keys())
+
+    for row in zip(*unemployed_data.values()):
+        # Truncate LanguageHaveWorkedWith to 5 values with wrap
+        lhww = row[2].split(', ')
+        if len(lhww) > 5:
+            lhww = lhww[:5]
+            lhww[4] += '...'
+        row = row[:2] + (', '.join(lhww),) + row[3:]
+        unemployed_table.add_row(row)
+
+    print("Employed Developers:\n")
+    print(employed_table)
+
+    print("\nUnemployed Developers:\n")
+    print(unemployed_table)
+    return
+
+def plot_analyze_result_4(data: collection.Collection, data_count: int):
     
     #Data Preparation
     age_groups, compensation_remote, compensation_hybrid = ['Under 25', '25-35', '35-45', '45-55', '55+'], [], []
-    for doc in analyze_result_3:
+    for doc in data:
         # data for the chart        
         if doc['RemoteWork'] == "Fully remote":
             compensation_remote.append(doc['AvgCompensation'])
@@ -461,21 +712,25 @@ def plot_analyze_result_3(data: collection.Collection, data_count: int):
     
     return
 
-def plot_analyze_result_4(data: collection.Collection, count: int):
+def plot_analyze_result_5(data: collection.Collection, data_count: int):
 
-    self_taught_count = len(list(data))
-    self_taught_perc = round((self_taught_count/count)*100, 2)
-    approach_followed = ["Self Taught", "Traditional Approach"]
-    approach_followed_perc = [self_taught_perc, 100 - self_taught_perc]
+    table = PrettyTable()
+    table.field_names = ["Job Title", "Years of Exp", "Compensation", "Top Languages"]
+    temp = []
+    for i in data:
+        temp.append(i)    
 
-    fig = plt.gcf()
-    fig.set_facecolor("white")
-    fig.set_size_inches(7,5)
+    for d in temp:
+        top_languages = ""
+        for language in d['TopLanguages']:
+            top_languages += language['Language'] + " (" + str(language['count']) + "), "
+        top_languages = top_languages.rstrip(", ")
+        
+        # Add the data row to the table
+        table.add_row([d['JobTitle'], d['YearsOfExp'], d['Compensation'], top_languages])
 
-    plt.pie(approach_followed_perc, labels=approach_followed, autopct='%1.1f%%', explode=[0.1, 0], startangle=90)
-    plt.title("Landed Full Time Job as Developer")
-    plt.axis('equal')
-    plt.show()
+    # Print the table
+    print(table)
 
     return
 
@@ -489,27 +744,29 @@ if __name__ == "__main__":
 
     #Count of total data.
     data_count = stack_data.count_documents({})    
-    print("Data Count => ", data_count, "\n")
+    # print("Data Count => ", data_count, "\n")
 
-    #Analyze 1: Tech Stack Preference
-    analyze_result_1 = analyze_tech_stack_preference(stack_data, data_count)
-    print("Task1 Result")
-    plot_analyze_result_1(analyze_result_1)
+    #Analyze 1: Impact on Mental Health    
+    # analyze_result_1 = analyze_mental_health_impact(stack_data, data_count)
+    # plot_analyze_result_1(analyze_result_1, data_count)
+    # print("\n")
 
-    #Analyze 2: Impact on Mental Health
-    print("Task2")
-    analyze_result_2 = analyze_mental_health_impact(stack_data, data_count)    
-    plot_analyze_result_2(analyze_result_2, data_count)
-    print("\n")
+    # #Analyze 2: Tech Stack Preference
+    # analyze_result_2 = analyze_tech_stack_preference(stack_data, data_count)    
+    # plot_analyze_result_2(analyze_result_2, data_count)
+    # print("\n")
 
-    # #Analyze 3: Impact of Remote Work on Age Group
-    print("Task3")
-    analyze_result_3 = analyze_remote_work_impact(stack_data, data_count)
-    plot_analyze_result_3(analyze_result_3, data_count)
-    print("\n")
+    # #Analyze 3: Percentage of Self Taught vs Traditional Learning that landed full time job as developer    
+    # analyze_result_3 = employed_vs_unemployed_gap(stack_data, data_count)
+    # plot_analyze_result_3(analyze_result_3, data_count)
+    # print("\n")
 
-    #Analyze 4: Percentage of Self Taught vs Traditional Learning that landed full time job as developer
-    print("Task4")
-    analyze_result_4 = self_taught_dev_landed_job(stack_data, data_count)    
-    plot_analyze_result_4(analyze_result_4, data_count)
+    # # #Analyze 4: Impact of Remote Work on Age Group    
+    # analyze_result_4 = analyze_remote_work_impact(stack_data, data_count)
+    # plot_analyze_result_4(analyze_result_4, data_count)
+    # print("\n")    
+
+    # #Analyze 5: Most Common Languages used across each job title    
+    analyze_result_5 = job_title_and_common_lang_used(stack_data, data_count)
+    plot_analyze_result_5(analyze_result_5, data_count)
     print("\n")
